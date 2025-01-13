@@ -23,10 +23,19 @@
 """
 
 import os
-
+import json
+import osmium
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
+from qgis.core import (
+    QgsVectorLayer,
+    QgsDataSourceUri,
+    QgsProject
+)
+from PyQt5.QtWidgets import QMessageBox
 
+
+import requests
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'MyTerrainMap_dialog_base.ui'))
@@ -42,3 +51,41 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
         # http://qt-project.org/doc/qt-4.8/designer-using-a-ui-file.html
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
+        self.pbGet.clicked.connect(self.onPbGetClicked)
+
+    def onPbGetClicked(self):
+        # apiKey=self.edAPIKey.text()
+        name=self.edName.text()
+
+        # 验证输入
+        if not name.strip():
+            print("请输入有效的地名")
+            return
+
+        # Overpass API 查询
+        query = f"""
+        [out:json];
+        (
+          relation["name"="{name}"]["admin_level"=8];
+        );
+        out body;
+        >;
+        out skel qt;
+        """
+        url = "https://overpass-api.de/api/interpreter"
+        try:
+            print("正在下载数据...")
+            response = requests.post(url, data={"data": query})
+            response.raise_for_status()  # 检查 HTTP 错误
+
+            # 将返回的 JSON 加载为 QGIS 图层
+            osm_json = json.loads(response.text)
+
+
+
+        except requests.exceptions.RequestException as e:
+            print(f"下载失败: {e}")
+
+        return
+
+
