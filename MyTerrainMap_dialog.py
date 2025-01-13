@@ -24,7 +24,8 @@
 
 import os
 import json
-import osmium
+from osm2geojson import json2geojson
+
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.core import (
@@ -33,7 +34,6 @@ from qgis.core import (
     QgsProject
 )
 from PyQt5.QtWidgets import QMessageBox
-
 
 import requests
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
@@ -56,7 +56,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
     def onPbGetClicked(self):
         # apiKey=self.edAPIKey.text()
         name=self.edName.text()
-
+        adminLevel=self.spAdminLevel.value()
         # 验证输入
         if not name.strip():
             print("请输入有效的地名")
@@ -66,7 +66,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
         query = f"""
         [out:json];
         (
-          relation["name"="{name}"]["admin_level"=8];
+          relation["name"="{name}"]["admin_level"={adminLevel}];
         );
         out body;
         >;
@@ -80,6 +80,25 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
 
             # 将返回的 JSON 加载为 QGIS 图层
             osm_json = json.loads(response.text)
+
+            if osm_json["elements"]:
+
+                geojson_data = json2geojson(osm_json)
+
+                geojson_data = json.dumps(geojson_data, indent=2, ensure_ascii=False)  # 设置 ensure_ascii=False 以支持中文字符
+
+                # 创建临时图层
+                layer = QgsVectorLayer(geojson_data, name, 'ogr')
+
+                if layer.isValid():
+                    # 将图层添加到当前QGIS项目
+                    QgsProject.instance().addMapLayer(layer)
+                else:
+                    print("图层无效")
+            else:
+                print("没有满足条件要素")
+                return
+
 
 
 
