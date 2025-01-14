@@ -31,16 +31,20 @@ from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.core import (
     QgsVectorLayer,
-    QgsDataSourceUri,
+    QgsRasterLayer,
     QgsProject,
-    QgsRasterLayer
+    QgsSingleBandPseudoColorRenderer,
+    QgsStyle,
+    QgsSingleBandGrayRenderer
 )
 
-from qgis.core import QgsProcessingFeedback
 import os
 import processing
 
 import requests
+
+import pydevd_pycharm
+
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(os.path.join(
     os.path.dirname(__file__), 'MyTerrainMap_dialog_base.ui'))
@@ -61,6 +65,9 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
         self.pbGet.clicked.connect(self.onPbGetClicked)
 
     def onPbGetClicked(self):
+        # # 其中的'localhost'和port是在Python Debug Server中填写的值
+        # pydevd_pycharm.settrace('localhost', port=53100, stdoutToServer=True, stderrToServer=True)
+
         apiKey=self.edAPIKey.text()
         name=self.edName.text()
         adminLevel=self.spAdminLevel.value()
@@ -100,7 +107,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 geojson_data = json.dumps(geojson_data, indent=2, ensure_ascii=False)  # 设置 ensure_ascii=False 以支持中文字符
 
-                geojson_file_path = self.folder_path+"//temp.geojson"
+                geojson_file_path = self.folder_path+"//"+name+".geojson"
                 with open(geojson_file_path, "w", encoding="utf-8") as file:
                     file.write(geojson_data)
 
@@ -116,8 +123,9 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
                     return
                 extent = layer.extent()
 
-                dem_path = self.download_srtm_dem(extent,apiKey)
-                self.clip_dem_with_layer(dem_path, geojson_file_path)
+                dem_path = self.download_srtm_dem(extent,apiKey,name)
+                clip_path=self.clip_dem_with_layer(dem_path, geojson_file_path,name)
+                self.saveImg(clip_path)
 
             else:
                 print("没有满足条件要素")
@@ -131,7 +139,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
 
         return
 
-    def download_srtm_dem(self,extent, apiKey):
+    def download_srtm_dem(self,extent, apiKey,name):
         """
         下载 SRTM 30m DEM 数据
         :param extent: QgsRectangle，范围对象，包含 xmin, ymin, xmax, ymax
@@ -173,7 +181,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
             # print(f"DEM 数据已保存到 {temp_file_path}")
 
 
-            dem_file_path = self.folder_path+"//temp.tif"
+            dem_file_path = self.folder_path+"//"+name+".tif"
             with open(dem_file_path, "wb") as file:
                 for chunk in response.iter_content(chunk_size=8192):
                     file.write(chunk)
@@ -194,7 +202,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
         except requests.exceptions.RequestException as e:
             print(f"下载失败: {e}")
 
-    def clip_dem_with_layer(self, dem_path, vector_path):
+    def clip_dem_with_layer(self, dem_path, vector_path,name):
         """
         使用矢量图层裁剪 DEM
         :param dem_path: DEM 栅格路径
@@ -208,7 +216,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
             # temp_dir = tempfile.gettempdir()
             # output_path = os.path.join(temp_dir, "clipped_dem.tif")
 
-            output_path = self.folder_path+"//daishu.tif"
+            output_path = self.folder_path+"//"+name+"_clip.tif"
 
             # 调用 GDAL 裁剪工具
             params = {
@@ -222,10 +230,69 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
             # 加载裁剪后的 DEM 图层
             clipped_layer = QgsRasterLayer(output_path, "Clipped DEM")
             if clipped_layer.isValid():
-                QgsProject.instance().addMapLayer(clipped_layer)
-                print(f"裁剪后的 DEM 已加载到地图：{output_path}")
+                return output_path
             else:
                 print("裁剪后的 DEM 图层无效")
 
         except Exception as e:
             print(f"裁剪失败: {e}")
+
+    def saveImg(self,dem_path):
+
+
+        # 加载DEM文件
+        dem_layer = QgsRasterLayer(dem_path, "DEM Layer")
+
+        if not dem_layer.isValid():
+            print("Failed to load the DEM layer!")
+            return
+
+        # 添加DEM图层到QGIS项目
+        QgsProject.instance().addMapLayer(dem_layer)
+
+
+        self.saveImg2(dem_path)
+
+
+    def saveImg2(self,dem_path):
+        from qgis.core import QgsRasterLayer, QgsRasterShader, QgsColorRampShader, QgsGradientColorRamp, \
+            QgsSingleBandPseudoColorRenderer
+        from qgis.PyQt.QtGui import QColor
+
+        # 加载栅格图层
+        raster_layer = QgsRasterLayer(dem_path, '伪彩色图层')
+
+        if not raster_layer.isValid():
+            print("Failed to load the raster layer!")
+        else:
+            # 创建栅格渲染器
+            shader = QgsRasterShader()
+
+            # 创建渐变色带（这里定义了蓝色、绿色、黄色和红色的渐变）
+            color_ramp = QgsGradientColorRamp(QColor(0, 0, 255), QColor(255, 0, 0))  # 从蓝色到红色渐变
+
+            # 设置颜色范围
+            ramp_shader = QgsColorRampShader()
+            ramp_shader.setSourceColorRamp(color_ramp)
+            ramp_shader.setMinimumValue(0)  # 设置最小值
+            ramp_shader.setMaximumValue(1000)  # 设置最大值
+            shader.setRasterShaderFunction(ramp_shader)
+
+            # 创建伪彩色渲染器
+            renderer = QgsSingleBandPseudoColorRenderer(raster_layer.dataProvider(), 1, shader)
+
+            # 应用渲染器
+            raster_layer.setRenderer(renderer)
+
+            # 刷新图层显示
+            raster_layer.triggerRepaint()
+
+            # 将图层添加到地图中
+            QgsProject.instance().addMapLayer(raster_layer)
+
+
+
+
+
+
+
