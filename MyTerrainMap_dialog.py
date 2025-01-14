@@ -25,15 +25,20 @@
 import os
 import json
 from osm2geojson import json2geojson
+import tempfile
 
 from qgis.PyQt import uic
 from qgis.PyQt import QtWidgets
 from qgis.core import (
     QgsVectorLayer,
     QgsDataSourceUri,
-    QgsProject
+    QgsProject,
+    QgsRasterLayer
 )
-from PyQt5.QtWidgets import QMessageBox
+
+from qgis.core import QgsProcessingFeedback
+import os
+import processing
 
 import requests
 # This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
@@ -42,6 +47,8 @@ FORM_CLASS, _ = uic.loadUiType(os.path.join(
 
 
 class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
+
+    folder_path="E://mytry"
     def __init__(self, parent=None):
         """Constructor."""
         super(MyTerrainMapDialog, self).__init__(parent)
@@ -54,7 +61,7 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
         self.pbGet.clicked.connect(self.onPbGetClicked)
 
     def onPbGetClicked(self):
-        # apiKey=self.edAPIKey.text()
+        apiKey=self.edAPIKey.text()
         name=self.edName.text()
         adminLevel=self.spAdminLevel.value()
         # 验证输入
@@ -85,16 +92,33 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
 
                 geojson_data = json2geojson(osm_json)
 
+                # 提取第一个 feature
+                geojson_data = {
+                    "type": "FeatureCollection",
+                    "features": [geojson_data["features"][0]]
+                }
+
                 geojson_data = json.dumps(geojson_data, indent=2, ensure_ascii=False)  # 设置 ensure_ascii=False 以支持中文字符
 
-                # 创建临时图层
-                layer = QgsVectorLayer(geojson_data, name, 'ogr')
+                geojson_file_path = self.folder_path+"//temp.geojson"
+                with open(geojson_file_path, "w", encoding="utf-8") as file:
+                    file.write(geojson_data)
+
+                # 加载保存的 GeoJSON 文件到地图
+                layer = QgsVectorLayer(geojson_file_path, "My Layer", "ogr")
 
                 if layer.isValid():
+                    pass
                     # 将图层添加到当前QGIS项目
-                    QgsProject.instance().addMapLayer(layer)
+                    # QgsProject.instance().addMapLayer(layer)
                 else:
                     print("图层无效")
+                    return
+                extent = layer.extent()
+
+                dem_path = self.download_srtm_dem(extent,apiKey)
+                self.clip_dem_with_layer(dem_path, geojson_file_path)
+
             else:
                 print("没有满足条件要素")
                 return
@@ -107,4 +131,101 @@ class MyTerrainMapDialog(QtWidgets.QDialog, FORM_CLASS):
 
         return
 
+    def download_srtm_dem(self,extent, apiKey):
+        """
+        下载 SRTM 30m DEM 数据
+        :param extent: QgsRectangle，范围对象，包含 xmin, ymin, xmax, ymax
+        :param apiKey: OpenTopography API 密钥
+        :param save_path: 保存 DEM 文件的路径
+        """
+        # 获取范围坐标
+        xmin = extent.xMinimum()
+        ymin = extent.yMinimum()
+        xmax = extent.xMaximum()
+        ymax = extent.yMaximum()
 
+        # 构建 API 请求参数
+        url = "https://portal.opentopography.org/API/globaldem"
+        params = {
+            "demtype": "SRTMGL1",  # SRTM 30m DEM
+            "south": ymin,
+            "north": ymax,
+            "west": xmin,
+            "east": xmax,
+            "outputFormat": "GTiff",  # GeoTIFF 格式
+            "API_Key": apiKey
+        }
+
+        try:
+            print("正在下载 DEM 数据...")
+            response = requests.get(url, params=params, stream=True)
+            response.raise_for_status()  # 检查 HTTP 请求是否成功
+
+            # # 创建临时文件存储 DEM 数据
+            # temp_dir = tempfile.gettempdir()
+            # temp_file_path = os.path.join(temp_dir, "srtm_dem.tif")
+            #
+            # # 保存下载的 DEM 数据到临时文件
+            # with open(temp_file_path, 'wb') as f:
+            #     for chunk in response.iter_content(chunk_size=8192):
+            #         f.write(chunk)
+            #
+            # print(f"DEM 数据已保存到 {temp_file_path}")
+
+
+            dem_file_path = self.folder_path+"//temp.tif"
+            with open(dem_file_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=8192):
+                    file.write(chunk)
+
+
+            # 将 DEM 数据加载为 QGIS 临时图层
+            layer_name = "SRTM DEM"
+            raster_layer = QgsRasterLayer(dem_file_path, layer_name)
+
+            if raster_layer.isValid():
+                # QgsProject.instance().addMapLayer(raster_layer)
+                # print(f"已将 DEM 图层加载到 QGIS 地图：{layer_name}")
+                return dem_file_path
+            else:
+                print("加载 DEM 图层失败，请检查文件格式和内容。")
+
+
+        except requests.exceptions.RequestException as e:
+            print(f"下载失败: {e}")
+
+    def clip_dem_with_layer(self, dem_path, vector_path):
+        """
+        使用矢量图层裁剪 DEM
+        :param dem_path: DEM 栅格路径
+        :param vector_layer: 裁剪的矢量图层
+        """
+        print(f"DEM Path: {dem_path}, Exists: {os.path.exists(dem_path)}")
+        print(f"Vector Path: {vector_path}, Exists: {os.path.exists(vector_path)}")
+        try:
+            print("正在裁剪 DEM 数据...")
+            # 裁剪的输出文件路径
+            # temp_dir = tempfile.gettempdir()
+            # output_path = os.path.join(temp_dir, "clipped_dem.tif")
+
+            output_path = self.folder_path+"//daishu.tif"
+
+            # 调用 GDAL 裁剪工具
+            params = {
+                'INPUT': dem_path,
+                'MASK': vector_path,
+                'OUTPUT': output_path
+            }
+
+            processing.run("gdal:cliprasterbymasklayer", params)
+
+            # 加载裁剪后的 DEM 图层
+            clipped_layer = QgsRasterLayer(output_path, "Clipped DEM")
+            if clipped_layer.isValid():
+                QgsProject.instance().addMapLayer(clipped_layer)
+                print(f"裁剪后的 DEM 已加载到地图：{output_path}")
+            else:
+                print("裁剪后的 DEM 图层无效")
+
+        except Exception as e:
+            print(f"裁剪失败: {e}")
